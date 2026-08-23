@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Mundo Aberto - San Andreas & Veículos</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: Arial, sans-serif; touch-action: none; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        #hud {
+            position: absolute; top: 10px; left: 10px; color: #fff;
+            background: rgba(0,0,0,0.7); padding: 12px; border-radius: 6px; font-size: 13px;
+        }
+        #action-btn {
+            position: absolute; bottom: 40px; right: 120px; width: 70px; height: 70px;
+            background: #2196F3; border: 2px solid #fff; border-radius: 50%; color: #fff;
+            font-weight: bold; display: none; justify-content: center; align-items: center;
+        }
+    </style>
+    <!-- Three.js e Carregador de GLTF -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+</head>
+<body>
+
+    <div id="hud">
+        <b>Status:</b> <span id="state-text">A pé</span><br>
+        <b>Controles:</b> Setas (Mover/Dirigir) | <b>[F]</b> Entrar/Sair do Veículo
+    </div>
+
+    <div id="canvas-container"></div>
+    <div id="action-btn">ENTRAR</div>
+
+    <script>
+        // --- 1. CONFIGURAÇÃO DA CENA ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87ceeb);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        dirLight.position.set(100, 200, 100);
+        scene.add(dirLight);
+
+        const loader = new THREE.GLTFLoader();
+
+        // --- 2. CARREGAR O MAPA DE SAN ANDREAS ---
+        // Substitua pelo caminho do seu mapa .glb/.gltf
+        /* 
+        loader.load('assets/map.glb', (gltf) => {
+            const mapModel = gltf.scene;
+            scene.add(mapModel);
+        }); 
+        */
+
+        // Chão de teste (remover quando tiver o arquivo do mapa San Andreas)
+        const ground = new THREE.Mesh(
+            new THREE.PlaneGeometry(1000, 1000),
+            new THREE.MeshLambertMaterial({ color: 0x444444 })
+        );
+        ground.rotation.x = -Math.PI / 2;
+        scene.add(ground);
+
+        // --- 3. JOGADOR ---
+        const player = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.5, 0.5, 1.8),
+            new THREE.MeshLambertMaterial({ color: 0x00ff00 })
+        );
+        player.position.set(0, 0.9, 0);
+        scene.add(player);
+
+        // --- 4. VEÍCULOS (CARROS E MOTOS) ---
+        const vehicles = [];
+
+        function createVehicle(x, z, type, color) {
+            const group = new THREE.Group();
+            let geo = type === 'car' ? new THREE.BoxGeometry(2, 1.2, 4) : new THREE.BoxGeometry(0.8, 1, 2);
+            let mat = new THREE.MeshLambertMaterial({ color: color });
+            let mesh = new THREE.Mesh(geo, mat);
+            mesh.position.y = type === 'car' ? 0.6 : 0.5;
+            group.add(mesh);
+
+            group.position.set(x, 0, z);
+            group.userData = {
+                type: type,
+                speed: 0,
+                maxSpeed: type === 'car' ? 0.6 : 0.8, // Moto é mais rápida
+                acceleration: 0.015,
+                steering: 0.04,
+                rotation: 0
+            };
+
+            scene.add(group);
+            vehicles.push(group);
+            return group;
+        }
+
+        // Criando veículos de teste no mapa
+        const car1 = createVehicle(5, -10, 'car', 0xff0000); // Carro vermelho
+        const bike1 = createVehicle(-5, -10, 'bike', 0x0000ff); // Moto azul
+
+        // --- 5. ESTADO E CONTROLES ---
+        let currentVehicle = null; // null = a pé; objeto = dentro do veículo
+        const keys = {};
+
+        window.addEventListener('keydown', (e) => {
+            keys[e.code] = true;
+            if (e.code === 'KeyF') toggleVehicleState();
+        });
+        window.addEventListener('keyup', (e) => keys[e.code] = false);
+
+        function toggleVehicleState() {
+            if (currentVehicle) {
+                // Sair do veículo
+                player.position.set(currentVehicle.position.x + 2, 0.9, currentVehicle.position.z);
+                player.visible = true;
+                currentVehicle = null;
+                document.getElementById('state-text').innerText = "A pé";
+            } else {
+                // Entrar no veículo próximo
+                vehicles.forEach(v => {
+                    let dist = player.position.distanceTo(v.position);
+                    if (dist < 3) {
+                        currentVehicle = v;
+                        player.visible = false;
+                        document.getElementById('state-text').innerText = "Dirigindo " + v.userData.type.toUpperCase();
+                    }
+                });
+            }
+        }
+
+        // --- 6. LOOP PRINCIPAL ---
+        function update() {
+            if (!currentVehicle) {
+                // Movimento A Pé
+                let speed = 0.15;
+                if (keys['ArrowUp']) player.position.z -= speed;
+                if (keys['ArrowDown']) player.position.z += speed;
+                if (keys['ArrowLeft']) player.position.x -= speed;
+                if (keys['ArrowRight']) player.position.x += speed;
+
+                // Câmera no Jogador
+                camera.position.set(player.position.x, player.position.y + 3, player.position.z + 6);
+                camera.lookAt(player.position);
+            } else {
+                // Movimento do Veículo (Carro / Moto)
+                let vData = currentVehicle.userData;
+
+                // Aceleração / Ré
+                if (keys['ArrowUp']) vData.speed = Math.min(vData.speed + vData.acceleration, vData.maxSpeed);
+                else if (keys['ArrowDown']) vData.speed = Math.max(vData.speed - vData.acceleration, -vData.maxSpeed / 2);
+                else vData.speed *= 0.95; // Fricção (Desacelerar solto)
+
+                // Direção
+                if (Math.abs(vData.speed) > 0.01) {
+                    let dir = vData.speed > 0 ? 1 : -1;
+                    if (keys['ArrowLeft']) vData.rotation += vData.steering * dir;
+                    if (keys['ArrowRight']) vData.rotation -= vData.steering * dir;
+                }
+
+                currentVehicle.rotation.y = vData.rotation;
+                currentVehicle.position.x -= Math.sin(vData.rotation) * vData.speed;
+                currentVehicle.position.z -= Math.cos(vData.rotation) * vData.speed;
+
+                // Prender o jogador ao veículo
+                player.position.copy(currentVehicle.position);
+
+                // Câmera no Veículo
+                camera.position.set(
+                    currentVehicle.position.x + Math.sin(vData.rotation) * 8,
+                    currentVehicle.position.y + 4,
+                    currentVehicle.position.z + Math.cos(vData.rotation) * 8
+                );
+                camera.lookAt(currentVehicle.position);
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            update();
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
