@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>GTA San Andreas Online Roleplay</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: Arial, sans-serif;
+            user-select: none;
+        }
+
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* HUD - Interface do Jogo */
+        #hud {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: #fff;
+            text-shadow: 2px 2px 4px #000;
+            font-size: 18px;
+            text-align: right;
+            pointer-events: none;
+        }
+
+        .hud-status {
+            font-weight: bold;
+            font-size: 22px;
+            color: #2ecc71;
+        }
+
+        /* Controles Touch Mobile */
+        .touch-controls {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            padding: 0 20px;
+            box-sizing: border-box;
+            pointer-events: none;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            pointer-events: auto;
+        }
+
+        .btn {
+            width: 65px;
+            height: 65px;
+            background: rgba(0, 0, 0, 0.6);
+            border: 2px solid #fff;
+            border-radius: 50%;
+            color: white;
+            font-size: 20px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            touch-action: manipulation;
+        }
+
+        .btn-action {
+            background: rgba(231, 76, 60, 0.7);
+            border-radius: 12px;
+            width: 80px;
+        }
+
+        /* Chat do Servidor */
+        #chat-box {
+            position: absolute;
+            bottom: 100px;
+            left: 20px;
+            width: 300px;
+            height: 150px;
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 8px;
+            color: white;
+            font-size: 13px;
+            padding: 10px;
+            overflow-y: auto;
+            pointer-events: none;
+        }
+    </style>
+
+    <!-- Bibliotecas 3D -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- Módulos do Sistema -->
+    <script src="policeSystem.js"></script>
+    <script src="network.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <!-- HUD / Placar -->
+    <div id="hud">
+        <div id="player-role">Profissão: Civil</div>
+        <div class="hud-status" id="player-money">$ 994,711,715</div>
+        <div id="wanted-stars">★★★★★★</div>
+    </div>
+
+    <!-- Chat de Mensagens do Servidor -->
+    <div id="chat-box">
+        <div><b style="color: #f1c40f;">[Servidor]:</b> Bem-vindo ao SA-MP Web RP!</div>
+    </div>
+
+    <!-- Controles Touch para Celulares -->
+    <div class="touch-controls">
+        <div class="btn-group">
+            <div class="btn" id="btn-left">◀</div>
+            <div class="btn" id="btn-right">▶</div>
+        </div>
+        <div class="btn-group">
+            <div class="btn" id="btn-up">▲</div>
+            <div class="btn" id="btn-down">▼</div>
+            <div class="btn btn-action" id="btn-action">AÇÃO</div>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. CONFIGURAÇÃO DA CENA 3D ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a1a);
+        scene.fog = new THREE.FogExp2(0x1a1a1a, 0.015);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        // Iluminação
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(50, 100, 50);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+
+        // --- 2. MAPA E CHÃO ---
+        const floorGeo = new THREE.PlaneGeometry(500, 500);
+        const floorMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+        const floor = new THREE.Mesh(floorGeo, floorMat);
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
+        scene.add(floor);
+
+        // Grade de ruas demonstrativa
+        const grid = new THREE.GridHelper(500, 50, 0x00ff00, 0x555555);
+        grid.position.y = 0.01;
+        scene.add(grid);
+
+        // --- 3. JOGADOR PRINCIPAL ---
+        const playerGroup = new THREE.Group();
+        const bodyGeo = new THREE.CylinderGeometry(0.5, 0.5, 1.8);
+        const bodyMat = new THREE.MeshStandardMaterial({ color: 0xe74c3c });
+        const playerMesh = new THREE.Mesh(bodyGeo, bodyMat);
+        playerMesh.position.y = 0.9;
+        playerMesh.castShadow = true;
+        playerGroup.add(playerMesh);
+        scene.add(playerGroup);
+
+        // --- 4. SISTEMAS MULTIPLAYER E REGRAS ---
+        const policeSystem = new PoliceSystem();
+        const network = new NetworkManager(scene, playerGroup);
+
+        // --- 5. CONTROLES (TECLADO E TOUCH) ---
+        const keys = { forward: false, backward: false, left: false, right: false };
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'w' || e.key === 'ArrowUp') keys.forward = true;
+            if (e.key === 's' || e.key === 'ArrowDown') keys.backward = true;
+            if (e.key === 'a' || e.key === 'ArrowLeft') keys.left = true;
+            if (e.key === 'd' || e.key === 'ArrowRight') keys.right = true;
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.key === 'w' || e.key === 'ArrowUp') keys.forward = false;
+            if (e.key === 's' || e.key === 'ArrowDown') keys.backward = false;
+            if (e.key === 'a' || e.key === 'ArrowLeft') keys.left = false;
+            if (e.key === 'd' || e.key === 'ArrowRight') keys.right = false;
+        });
+
+        // Configuração Botões Mobile Touch
+        const bindTouch = (id, key) => {
+            const btn = document.getElementById(id);
+            btn.addEventListener('touchstart', (e) => { e.preventDefault(); keys[key] = true; });
+            btn.addEventListener('touchend', (e) => { e.preventDefault(); keys[key] = false; });
+        };
+        bindTouch('btn-up', 'forward');
+        bindTouch('btn-down', 'backward');
+        bindTouch('btn-left', 'left');
+        bindTouch('btn-right', 'right');
+
+        // --- 6. LOOP DE ATUALIZAÇÃO (GAME LOOP) ---
+        const speed = 0.15;
+        const rotSpeed = 0.04;
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Movimentação do Personagem
+            if (keys.forward) playerGroup.translateZ(-speed);
+            if (keys.backward) playerGroup.translateZ(speed);
+            if (keys.left) playerGroup.rotation.y += rotSpeed;
+            if (keys.right) playerGroup.rotation.y -= rotSpeed;
+
+            // Câmera em 3ª Pessoa acompanhando o Jogador
+            const camOffset = new THREE.Vector3(0, 5, 10).applyAxisAngle(new THREE.Vector3(0, 1, 0), playerGroup.rotation.y);
+            camera.position.copy(playerGroup.position).add(camOffset);
+            camera.lookAt(playerGroup.position.clone().add(new THREE.Vector3(0, 1, 0)));
+
+            // Sincronização Multiplayer em Tempo Real via WebSocket
+            network.sendUpdate(
+                playerGroup.position.x,
+                playerGroup.position.y,
+                playerGroup.position.z,
+                playerGroup.rotation.y,
+                policeSystem.player ? policeSystem.player.isPolice : false
+            );
+
+            renderer.render(scene, camera);
+        }
+
+        // Ajuste automático de resolução
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Iniciar
+        animate();
+    </script>
+</body>
+  </html>
+  
