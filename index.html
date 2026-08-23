@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Mundo Aberto - San Andreas Mobile & PC</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: Arial, sans-serif; touch-action: none; user-select: none; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        
+        #hud {
+            position: absolute; top: 10px; left: 10px; color: #fff;
+            background: rgba(0,0,0,0.7); padding: 12px; border-radius: 6px; font-size: 13px; z-index: 10;
+        }
+
+        /* Controles Mobile (Visíveis apenas em dispositivos touch ou testados) */
+        .mobile-control {
+            position: absolute; display: flex; justify-content: center; align-items: center;
+            background: rgba(255, 255, 255, 0.25); border: 2px solid rgba(255, 255, 255, 0.5);
+            border-radius: 50%; color: #fff; font-weight: bold; z-index: 10; user-select: none;
+        }
+
+        #joystick-base {
+            bottom: 40px; left: 40px; width: 120px; height: 120px;
+        }
+        #joystick-knob {
+            position: absolute; top: 35px; left: 35px; width: 50px; height: 50px;
+            background: rgba(255, 255, 255, 0.6); border-radius: 50%; pointer-events: none;
+        }
+
+        #btn-action { bottom: 50px; right: 40px; width: 70px; height: 70px; background: rgba(33, 150, 243, 0.7); }
+        #btn-jump { bottom: 135px; right: 40px; width: 60px; height: 60px; background: rgba(76, 175, 80, 0.7); }
+        
+        /* Botões extras para Veículos no Mobile */
+        #vehicle-controls { display: none; position: absolute; bottom: 40px; right: 130px; z-index: 10; }
+        .v-btn { width: 60px; height: 60px; margin-left: 10px; background: rgba(255, 152, 0, 0.7); display: inline-flex; }
+    </style>
+    <!-- Three.js e Carregador de GLTF -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+</head>
+<body>
+
+    <div id="hud">
+        <b>Status:</b> <span id="state-text">A pé</span><br>
+        <b>PC:</b> Setas + F | <b>Mobile:</b> Analógico + Botões na tela
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <!-- Interface Mobile / Touch -->
+    <div id="joystick-base" class="mobile-control">
+        <div id="joystick-knob"></div>
+    </div>
+    
+    <div id="btn-jump" class="mobile-control">PULA</div>
+    <div id="btn-action" class="mobile-control">ENTR</div>
+
+    <div id="vehicle-controls">
+        <div id="btn-accel" class="mobile-control v-btn">ACEL</div>
+        <div id="btn-brake" class="mobile-control v-btn">RÉ</div>
+    </div>
+
+    <script>
+        // --- 1. CONFIGURAÇÃO DA CENA ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87ceeb);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        dirLight.position.set(100, 200, 100);
+        scene.add(dirLight);
+
+        // Chão de teste
+        const ground = new THREE.Mesh(
+            new THREE.PlaneGeometry(1000, 1000),
+            new THREE.MeshLambertMaterial({ color: 0x444444 })
+        );
+        ground.rotation.x = -Math.PI / 2;
+        scene.add(ground);
+
+        // --- 2. JOGADOR E VEÍCULOS ---
+        const player = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.5, 0.5, 1.8),
+            new THREE.MeshLambertMaterial({ color: 0x00ff00 })
+        );
+        player.position.set(0, 0.9, 0);
+        scene.add(player);
+
+        let playerVelocityY = 0;
+        let isGrounded = true;
+
+        const vehicles = [];
+        function createVehicle(x, z, type, color) {
+            const group = new THREE.Group();
+            let geo = type === 'car' ? new THREE.BoxGeometry(2, 1.2, 4) : new THREE.BoxGeometry(0.8, 1, 2);
+            let mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: color }));
+            mesh.position.y = type === 'car' ? 0.6 : 0.5;
+            group.add(mesh);
+            group.position.set(x, 0, z);
+            group.userData = { type, speed: 0, maxSpeed: type === 'car' ? 0.6 : 0.8, acceleration: 0.015, steering: 0.04, rotation: 0 };
+            scene.add(group);
+            vehicles.push(group);
+            return group;
+        }
+
+        createVehicle(5, -10, 'car', 0xff0000);
+        createVehicle(-5, -10, 'bike', 0x0000ff);
+
+        // --- 3. CONTROLES UNIFICADOS (PC + MOBILE) ---
+        const keys = {};
+        let currentVehicle = null;
+
+        // Movimento via Analógico Virtual
+        let joystickData = { active: false, x: 0, y: 0 };
+        const joyBase = document.getElementById('joystick-base');
+        const joyKnob = document.getElementById('joystick-knob');
+        let joyCenter = { x: 0, y: 0 };
+
+        joyBase.addEventListener('touchstart', (e) => {
+            const rect = joyBase.getBoundingClientRect();
+            joyCenter = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+            joystickData.active = true;
+            handleTouchMove(e.touches[0]);
+        });
+
+        window.addEventListener('touchmove', (e) => {
+            if (!joystickData.active) return;
+            handleTouchMove(e.touches[0]);
+        });
+
+        window.addEventListener('touchend', () => {
+            if (joystickData.active) {
+                joystickData.active = false;
+                joystickData.x = 0;
+                joystickData.y = 0;
+                joyKnob.style.transform = `translate(0px, 0px)`;
+            }
+        });
+
+        function handleTouchMove(touch) {
+            let dx = touch.clientX - joyCenter.x;
+            let dy = touch.clientY - joyCenter.y;
+            let dist = Math.sqrt(dx * dx + dy * dy);
+            let maxDist = 45;
+
+            if (dist > maxDist) {
+                dx = (dx / dist) * maxDist;
+                dy = (dy / dist) * maxDist;
+            }
+
+            joyKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+            joystickData.x = dx / maxDist;
+            joystickData.y = dy / maxDist;
+        }
+
+        // Eventos dos Botões Mobile
+        document.getElementById('btn-action').addEventListener('click', toggleVehicleState);
+        document.getElementById('btn-jump').addEventListener('click', () => {
+            if (isGrounded && !currentVehicle) {
+                playerVelocityY = 0.25;
+                isGrounded = false;
+            }
+        });
+
+        // Controles Mobile Acelerar / Ré
+        let mobileAccel = false;
+        let mobileBrake = false;
+        document.getElementById('btn-accel').addEventListener('touchstart', () => mobileAccel = true);
+        document.getElementById('btn-accel').addEventListener('touchend', () => mobileAccel = false);
+        document.getElementById('btn-brake').addEventListener('touchstart', () => mobileBrake = true);
+        document.getElementById('btn-brake').addEventListener('touchend', () => mobileBrake = false);
+
+        // Teclado PC
+        window.addEventListener('keydown', (e) => {
+            keys[e.code] = true;
+            if (e.code === 'KeyF') toggleVehicleState();
+            if (e.code === 'Space' && isGrounded && !currentVehicle) {
+                playerVelocityY = 0.25;
+                isGrounded = false;
+            }
+        });
+        window.addEventListener('keyup', (e) => keys[e.code] = false);
+
+        function toggleVehicleState() {
+            if (currentVehicle) {
+                player.position.set(currentVehicle.position.x + 2, 0.9, currentVehicle.position.z);
+                player.visible = true;
+                currentVehicle = null;
+                document.getElementById('state-text').innerText = "A pé";
+                document.getElementById('vehicle-controls').style.display = 'none';
+            } else {
+                vehicles.forEach(v => {
+                    if (player.position.distanceTo(v.position) < 3) {
+                        currentVehicle = v;
+                        player.visible = false;
+                        document.getElementById('state-text').innerText = "Dirigindo " + v.userData.type.toUpperCase();
+                        document.getElementById('vehicle-controls').style.display = 'block';
+                    }
+                });
+            }
+        }
+
+        // --- 4. LOOP DO JOGO ---
+        function update() {
+            if (!currentVehicle) {
+                // Movimento A Pé (Suporta Teclas de PC e Analógico Mobile)
+                let speed = 0.15;
+                let moveX = 0, moveZ = 0;
+
+                if (keys['ArrowUp'] || keys['KeyW']) moveZ -= speed;
+                if (keys['ArrowDown'] || keys['KeyS']) moveZ += speed;
+                if (keys['ArrowLeft'] || keys['KeyA']) moveX -= speed;
+                if (keys['ArrowRight'] || keys['KeyD']) moveX += speed;
+
+                if (joystickData.active) {
+                    moveX += joystickData.x * speed;
+                    moveZ += joystickData.y * speed;
+                }
+
+                player.position.x += moveX;
+                player.position.z += moveZ;
+
+                // Gravidade e Pulo
+                player.position.y += playerVelocityY;
+                if (!isGrounded) {
+                    playerVelocityY -= 0.01;
+                    if (player.position.y <= 0.9) {
+                        player.position.y = 0.9;
+                        playerVelocityY = 0;
+                        isGrounded = true;
+                    }
+                }
+
+                camera.position.set(player.position.x, player.position.y + 3, player.position.z + 6);
+                camera.lookAt(player.position);
+            } else {
+                // Movimento do Veículo
+                let vData = currentVehicle.userData;
+
+                let isAccel = keys['ArrowUp'] || keys['KeyW'] || mobileAccel;
+                let isBrake = keys['ArrowDown'] || keys['KeyS'] || mobileBrake;
+                let steerLeft = keys['ArrowLeft'] || keys['KeyA'] || (joystickData.active && joystickData.x < -0.3);
+                let steerRight = keys['ArrowRight'] || keys['KeyD'] || (joystickData.active && joystickData.x > 0.3);
+
+                if (isAccel) vData.speed = Math.min(vData.speed + vData.acceleration, vData.maxSpeed);
+                else if (isBrake) vData.speed = Math.max(vData.speed - vData.acceleration, -vData.maxSpeed / 2);
+                else vData.speed *= 0.95;
+
+                if (Math.abs(vData.speed) > 0.01) {
+                    let dir = vData.speed > 0 ? 1 : -1;
+                    if (steerLeft) vData.rotation += vData.steering * dir;
+                    if (steerRight) vData.rotation -= vData.steering * dir;
+                }
+
+                currentVehicle.rotation.y = vData.rotation;
+                currentVehicle.position.x -= Math.sin(vData.rotation) * vData.speed;
+                currentVehicle.position.z -= Math.cos(vData.rotation) * vData.speed;
+
+                player.position.copy(currentVehicle.position);
+
+                camera.position.set(
+                    currentVehicle.position.x + Math.sin(vData.rotation) * 8,
+                    currentVehicle.position.y + 4,
+                    currentVehicle.position.z + Math.cos(vData.rotation) * 8
+                );
+                camera.lookAt(currentVehicle.position);
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            update();
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
